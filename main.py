@@ -75,8 +75,7 @@ def build_prompt_for_iqa_analysis(iqa_data):
     Analyze the Water Quality Index (WQI) for the following points:
     """
     for entry in iqa_data:
-        prompt += f"Point {entry['point']}:
-"
+        prompt += f"Point {entry['point']}:\n"
         for key, value in entry.items():
             if key not in ['point', 'id']:
                 prompt += f"  - {key}: {value}\n"
