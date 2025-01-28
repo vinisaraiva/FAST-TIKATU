@@ -413,3 +413,160 @@ async def analyze_iqa_data(
             }
     finally:
         conn.close()
+
+
+
+from fastapi import HTTPException
+from fastapi import FastAPI
+from pydantic import BaseModel
+from typing import Dict, Optional
+import psycopg2
+import re
+
+# Definição da classe IQARequest para validação
+class IQARequest(BaseModel):
+    city: str
+    river: str
+    point: str
+    date: str
+
+# Definição da classe AnalysisRequest para análise personalizada
+class AnalysisRequest(BaseModel):
+    parameters: dict
+    collection_site: Optional[str]
+    water_body_type: Optional[str]
+    weather_conditions: Optional[str]
+    human_activities: Optional[str]
+    usage: Optional[str]
+    coordinates: Optional[str]
+    collection_date: Optional[str]
+    collection_time: Optional[str]
+
+# Função para conectar ao banco de dados Supabase
+def get_db_connection():
+    try:
+        conn = psycopg2.connect(SUPABASE_DB_URL, sslmode="require")
+        return conn
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database connection error: {str(e)}")
+
+# Função para consultar os dados necessários no banco
+def fetch_monitoring_data(city: str, river: str, point: str, date: str):
+    query = (
+        "SELECT pH, TURBIDEZ, OD, TEMPERATURA, COLIFORMES, TDS, DBO, NITROGENIO_TOTAL, FOSFORO_TOTAL "
+        "FROM monitoring_data WHERE city = %s AND river = %s AND point = %s AND collection_date = %s"
+    )
+
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(query, (city, river, point, date))
+            result = cursor.fetchone()
+            conn.close()
+
+            if result:
+                # Converte os resultados para um dicionário
+                columns = ["pH", "TURBIDEZ", "OD", "TEMPERATURA", "COLIFORMES", "TDS", "DBO", "NITROGENIO_TOTAL", "FOSFORO_TOTAL"]
+                return dict(zip(columns, result))
+            else:
+                raise HTTPException(status_code=404, detail="No data found for the specified filters.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching monitoring data: {str(e)}")
+
+# Função para calcular o IQA
+def calcular_iqa(city: str, river: str, point: str, date: str):
+    try:
+        # Busca os dados do banco de dados
+        valores_parametros = fetch_monitoring_data(city, river, point, date)
+
+        # Convertendo os valores para float, se possível
+        faltantes = []
+        for key in valores_parametros:
+            if isinstance(valores_parametros[key], str):
+                valores_parametros[key] = re.sub(r"[^0-9.,]", "", valores_parametros[key]).replace(",", ".")
+            try:
+                valores_parametros[key] = float(valores_parametros[key])
+            except (ValueError, TypeError):
+                valores_parametros[key] = None
+                faltantes.append(key)
+
+        if any(v is None for v in valores_parametros.values()):
+            return None, f"Erro: Parâmetros faltantes ou inválidos: {', '.join(faltantes)}. Não é possível calcular o IQA sem todos os parâmetros."
+
+        # Pesos dos parâmetros utilizados no cálculo do IQA
+        pesos = {
+            "OD": 0.17,
+            "COLIFORMES": 0.15,
+            "DBO": 0.10,
+            "NITROGENIO_TOTAL": 0.10,
+            "FOSFORO_TOTAL": 0.10,
+            "TURBIDEZ": 0.08,
+            "TDS": 0.08,
+            "pH": 0.12,
+            "TEMPERATURA": 0.10,
+        }
+
+        # Função para converter os valores dos parâmetros para a escala de 0 a 100 (qi)
+        def converter_para_qi(param, valor):
+            conversao_qi = {
+                "OD": 80 if valor >= 6 else 50,
+                "COLIFORMES": 30 if valor >= 1000 else 70,
+                "DBO": 60 if valor <= 5 else 30,
+                "NITROGENIO_TOTAL": 70 if valor <= 10 else 40,
+                "FOSFORO_TOTAL": 90 if valor <= 0.1 else 50,
+                "TURBIDEZ": 85 if valor <= 10 else 40,
+                "TDS": 75 if valor <= 500 else 50,
+                "pH": 90 if 6.5 <= valor <= 8.5 else 60,
+                "TEMPERATURA": 70 if valor <= 25 else 50,
+            }
+            return conversao_qi.get(param, 50)
+
+        # Converte cada valor de parâmetro para qi
+        valores_parametros_qi = {
+            param: converter_para_qi(param, valor)
+            for param, valor in valores_parametros.items()
+        }
+
+        # Cálculo da média ponderada para obter o IQA
+        iqa = sum(
+            valores_parametros_qi[param] * pesos.get(param, 0)
+            for param in valores_parametros_qi
+        ) / sum(pesos.values())
+
+        return iqa, None
+    except Exception as e:
+        return None, str(e)
+
+# Função para construir o prompt para análise personalizada
+def build_prompt_for_custom_analysis(request: AnalysisRequest):
+    prompt = f"""
+    Análise personalizada da qualidade da água coletada em {request.collection_site}:
+    - Tipo de corpo de água: {request.water_body_type}
+    - Condições climáticas: {request.weather_conditions}
+    - Atividades humanas próximas: {request.human_activities}
+    - Uso pretendido da água: {request.usage}
+    - Coordenadas: {request.coordinates}
+    - Data da coleta: {request.collection_date}
+    - Hora da coleta: {request.collection_time}
+
+    Parâmetros físico-químicos observados:
+    {request.parameters}
+
+    Gere uma análise detalhada da qualidade da água com base nesses dados.
+    """
+    return prompt
+
+# Inicializando o FastAPI e rota de cálculo
+app = FastAPI()
+
+@app.post("/calculate-iqa")
+async def calculate_iqa(request: IQARequest):
+    iqa, error = calcular_iqa(request.city, request.river, request.point, request.date)
+    if error:
+        return {"error": error}
+    return {"iqa": iqa}
+
+@app.post("/custom-analysis")
+async def custom_analysis(request: AnalysisRequest):
+    prompt = build_prompt_for_custom_analysis(request)
+    return {"prompt": prompt}
