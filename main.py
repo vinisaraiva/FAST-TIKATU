@@ -1,12 +1,13 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict
 import psycopg2
 import psycopg2.extras
 import os
 import openai
 from fpdf import FPDF
+import re  # Adicionado para manipulação de strings
 
 # Configuração inicial do FastAPI
 app = FastAPI(title="Tikatu API", version="1.0.0")
@@ -44,6 +45,85 @@ class AnalysisRequest(BaseModel):
     coordinates: Optional[str]
     collection_date: Optional[str]
     collection_time: Optional[str]
+
+# Novo modelo para cálculo do IQA
+class IQARequest(BaseModel):
+    parameters: Dict[str, str]  # Dicionário com os parâmetros e seus valores
+
+# Função para calcular o IQA
+def calcular_iqa(valores_parametros: Dict[str, str]):
+    try:
+        # Convertendo os valores para float, se possível
+        faltantes = []
+        parametros_relevantes = ['pH', 'TURBIDEZ (NTU)', 'OD', 'TEMPERATURA', 'COLIFORMES', 'TDS', 'DBO', 'NITROGENIO_TOTAL', 'FOSFORO_TOTAL']
+        valores_parametros = {k: valores_parametros[k] for k in parametros_relevantes if k in valores_parametros}
+        for key in valores_parametros:
+            # Substituindo vírgula por ponto e removendo caracteres não numéricos
+            if isinstance(valores_parametros[key], str):
+                valores_parametros[key] = re.sub(r'[^0-9.,]', '', valores_parametros[key]).replace(',', '.')
+            try:
+                valores_parametros[key] = float(valores_parametros[key])
+            except (ValueError, TypeError):
+                valores_parametros[key] = None
+                faltantes.append(key)
+        
+        if any(v is None for v in valores_parametros.values()):
+            return None, f"Erro: Parâmetros faltantes ou inválidos: {', '.join(faltantes)}. Não é possível calcular o IQA sem todos os parâmetros."
+
+        # Pesos dos parâmetros utilizados no cálculo do IQA
+        pesos = {
+            'OD': 0.17,
+            'COLIFORMES': 0.15,
+            'DBO': 0.10,
+            'NITROGENIO_TOTAL': 0.10,
+            'FOSFORO_TOTAL': 0.10,
+            'TURBIDEZ (NTU)': 0.08,
+            'TDS': 0.08,
+            'pH': 0.12,
+            'TEMPERATURA': 0.10
+        }
+
+        # Função para converter os valores dos parâmetros para a escala de 0 a 100 (qi)
+        def converter_para_qi(param, valor):
+            conversao_qi = {
+                'OD': 80 if valor >= 6 else 50,
+                'COLIFORMES': 30 if valor >= 1000 else 70,
+                'DBO': 60 if valor <= 5 else 30,
+                'NITROGENIO_TOTAL': 70 if valor <= 10 else 40,
+                'FOSFORO_TOTAL': 90 if valor <= 0.1 else 50,
+                'TURBIDEZ (NTU)': 85 if valor <= 10 else 40,
+                'TDS': 75 if valor <= 500 else 50,
+                'pH': 90 if 6.5 <= valor <= 8.5 else 60,
+                'TEMPERATURA': 70 if valor <= 25 else 50
+            }
+            return conversao_qi.get(param, 50)
+
+        # Converte cada valor de parâmetro para qi
+        valores_parametros_qi = {param: converter_para_qi(param, valor) for param, valor in valores_parametros.items()}
+
+        # Cálculo da média ponderada para obter o IQA
+        iqa = sum(valores_parametros_qi[param] * pesos.get(param, 0) for param in valores_parametros_qi) / sum(pesos.values())
+              
+        return iqa, None
+    except Exception as e:
+        return None, str(e)
+
+# Novo endpoint para cálculo do IQA
+@app.post("/iqa/calculate")
+async def calculate_iqa(request: IQARequest):
+    try:
+        # Verifica se os parâmetros foram fornecidos
+        if not request.parameters:
+            raise HTTPException(status_code=400, detail="Nenhum parâmetro fornecido para cálculo do IQA.")
+
+        # Calcula o IQA
+        iqa, erro = calcular_iqa(request.parameters)
+        if erro:
+            raise HTTPException(status_code=400, detail=erro)
+
+        return {"iqa": iqa}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Função para realizar análise com OpenAI
 def generate_analysis_with_openai(prompt):
