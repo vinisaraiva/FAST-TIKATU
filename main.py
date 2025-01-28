@@ -8,6 +8,8 @@ import os
 import openai
 from fpdf import FPDF
 import re  # Adicionado para manipulação de strings
+from typing import Dict
+
 
 # Configuração inicial do FastAPI
 app = FastAPI(title="Tikatu API", version="1.0.0")
@@ -18,10 +20,6 @@ SUPABASE_DB_URL = f"postgresql://postgres:{os.getenv('SUPABASE_TK_PWD')}@db.jxbs
 # Configuração da API OpenAI
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-from fastapi import HTTPException
-from typing import Dict
-import psycopg2
-import re
 
 # Função para conectar ao banco de dados Supabase
 def get_db_connection():
@@ -30,6 +28,16 @@ def get_db_connection():
         return conn
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database connection error: {str(e)}")
+
+
+
+# Definição da classe IQARequest para validação
+class IQARequest(BaseModel):
+    city: str
+    river: str
+    point: str
+    date: str
+
 
 # Função para consultar os dados necessários no banco
 def fetch_monitoring_data(city: str, river: str, point: str, date: str):
@@ -117,6 +125,16 @@ def calcular_iqa(city: str, river: str, point: str, date: str):
         return iqa, None
     except Exception as e:
         return None, str(e)
+
+# Inicializando o FastAPI e rota de cálculo
+app = FastAPI()
+
+@app.post("/calculate-iqa")
+async def calculate_iqa(request: IQARequest):
+    iqa, error = calcular_iqa(request.city, request.river, request.point, request.date)
+    if error:
+        return {"error": error}
+    return {"iqa": iqa}
 
 
 # Novo endpoint para cálculo do IQA
