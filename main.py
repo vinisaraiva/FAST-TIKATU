@@ -12,7 +12,6 @@ from fpdf import FPDF
 app = FastAPI(title="Tikatu API", version="1.0.0")
 
 # Configuração do Supabase
-#SUPABASE_DB_URL = "postgresql://postgres:<PASSWORD>@db.jxbsqnkdtdmshfwidphc.supabase.co:5432/postgres"
 SUPABASE_DB_URL = f"postgresql://postgres:{os.getenv('SUPABASE_TK_PWD')}@db.jxbsqnkdtdmshfwidphc.supabase.co:5432/postgres"
 
 # Configuração da API OpenAI
@@ -46,32 +45,6 @@ class AnalysisRequest(BaseModel):
     collection_date: Optional[str]
     collection_time: Optional[str]
 
-class NewsItem(BaseModel):
-    id: Optional[int]
-    title: str
-    summary: str
-    content: str
-    date: Optional[str]
-    image_url: Optional[str]
-
-# Função para gerar PDFs dinâmicos
-def generate_analysis_pdf(analysis_result: dict, pdf_path: str):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-
-    # Título
-    pdf.set_font("Arial", style="B", size=16)
-    pdf.cell(200, 10, txt="Water Quality Analysis Report", ln=True, align='C')
-    pdf.ln(10)
-
-    # Corpo do relatório
-    pdf.set_font("Arial", size=12)
-    for key, value in analysis_result.items():
-        pdf.cell(0, 10, txt=f"{key}: {value}", ln=True)
-
-    pdf.output(pdf_path)
-
 # Função para realizar análise com OpenAI
 def generate_analysis_with_openai(prompt):
     try:
@@ -85,29 +58,35 @@ def generate_analysis_with_openai(prompt):
         raise HTTPException(status_code=500, detail=f"Error generating analysis: {str(e)}")
 
 # Função para construir prompts específicos
-def build_prompt_for_custom_analysis(request: AnalysisRequest):
-    prompt = f"""
-    Analysis of water collected in a {request.collection_site}:
-    Collection date: {request.collection_date} at {request.collection_time}.
-    Location: {request.coordinates}.
-
-    Environmental conditions:
-    - Type of water body: {request.water_body_type}
-    - Recent weather conditions: {request.weather_conditions}
-    - Nearby human activities: {request.human_activities}
-    - What will be the use of the water: {request.usage}
-
-    Physicochemical parameters:
+def build_prompt_for_monitoring_analysis(monitoring_data):
+    prompt = """
+    Analyze the following water monitoring data:
     """
-    for key, value in request.parameters.items():
-        prompt += f"- {key}: {value}\n"
-
-    prompt += "\nAct as an expert with a PhD in water parameter analysis, but you need to respond with language accessible to diverse audiences. Generate an initial analysis of water quality based on this information."
+    for entry in monitoring_data:
+        prompt += f"Point {entry['point']} on {entry['collection_date']}:
+"
+        for key, value in entry.items():
+            if key not in ['point', 'collection_date', 'id']:
+                prompt += f"  - {key}: {value}\n"
+    prompt += "\nGenerate an analysis considering environmental impact and potential causes."
     return prompt
 
-# Endpoint para listar dados de monitoramento com filtros
-@app.get("/monitoring")
-async def get_monitoring_data(
+def build_prompt_for_iqa_analysis(iqa_data):
+    prompt = """
+    Analyze the Water Quality Index (WQI) for the following points:
+    """
+    for entry in iqa_data:
+        prompt += f"Point {entry['point']}:
+"
+        for key, value in entry.items():
+            if key not in ['point', 'id']:
+                prompt += f"  - {key}: {value}\n"
+    prompt += "\nProvide a detailed analysis considering WQI values and their implications."
+    return prompt
+
+# Endpoint para análise da tela de monitoramento
+@app.post("/monitoring/analysis")
+async def analyze_monitoring_data(
     city: Optional[str] = None,
     river: Optional[str] = None,
     parameter: Optional[str] = None,
@@ -148,13 +127,20 @@ async def get_monitoring_data(
 
             cursor.execute(query, params)
             monitoring_data = cursor.fetchall()
-            return {"monitoring_data": monitoring_data}
+
+            if not monitoring_data:
+                raise HTTPException(status_code=404, detail="No monitoring data found for the specified filters.")
+
+            prompt = build_prompt_for_monitoring_analysis(monitoring_data)
+            analysis_result = generate_analysis_with_openai(prompt)
+
+            return {"monitoring_data": monitoring_data, "analysis": analysis_result}
     finally:
         conn.close()
 
-# Endpoint para listar dados de IQA com filtros específicos
-@app.get("/iqa")
-async def get_iqa_data(
+# Endpoint para análise da tela de IQA
+@app.post("/iqa/analysis")
+async def analyze_iqa_data(
     city: Optional[str] = None,
     river: Optional[str] = None,
     points: Optional[List[str]] = Query(None)
@@ -179,95 +165,13 @@ async def get_iqa_data(
 
             cursor.execute(query, params)
             iqa_data = cursor.fetchall()
-            return {"iqa_data": iqa_data}
-    finally:
-        conn.close()
 
-# Endpoint para gerar análise personalizada
-@app.post("/custom/analysis")
-async def custom_analysis(request: AnalysisRequest):
-    try:
-        if not request.parameters or all(value is None or value == "" for value in request.parameters.values()):
-            raise HTTPException(status_code=400, detail="At least one parameter must be provided to generate the analysis.")
+            if not iqa_data:
+                raise HTTPException(status_code=404, detail="No IQA data found for the specified filters.")
 
-        prompt = build_prompt_for_custom_analysis(request)
-        analysis_result = generate_analysis_with_openai(prompt)
+            prompt = build_prompt_for_iqa_analysis(iqa_data)
+            analysis_result = generate_analysis_with_openai(prompt)
 
-        return {"parameters": request.parameters, "analysis": analysis_result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# Endpoint para listar todas as notícias
-@app.get("/news")
-async def get_news():
-    conn = get_db_connection()
-    try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-            cursor.execute("SELECT * FROM news;")
-            news = cursor.fetchall()
-            return {"news": news}
-    finally:
-        conn.close()
-
-# Endpoint para detalhar uma notícia específica
-@app.get("/news/{news_id}")
-async def get_news_item(news_id: int):
-    conn = get_db_connection()
-    try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-            cursor.execute("SELECT * FROM news WHERE id = %s;", (news_id,))
-            news_item = cursor.fetchone()
-            if not news_item:
-                raise HTTPException(status_code=404, detail="News item not found.")
-            return news_item
-    finally:
-        conn.close()
-
-# Endpoint para adicionar uma nova notícia
-@app.post("/news")
-async def create_news(news_item: NewsItem):
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO news (title, summary, content, date, image_url)
-                VALUES (%s, %s, %s, %s, %s);
-                """,
-                (news_item.title, news_item.summary, news_item.content, news_item.date, news_item.image_url)
-            )
-            conn.commit()
-            return {"message": "News item created successfully."}
-    finally:
-        conn.close()
-
-# Endpoint para atualizar uma notícia
-@app.put("/news/{news_id}")
-async def update_news(news_id: int, news_item: NewsItem):
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                """
-                UPDATE news
-                SET title = %s, summary = %s, content = %s, date = %s, image_url = %s
-                WHERE id = %s;
-                """,
-                (news_item.title, news_item.summary, news_item.content, news_item.date, news_item.image_url, news_id)
-            )
-            conn.commit()
-            return {"message": "News item updated successfully."}
-    finally:
-        conn.close()
-
-# Endpoint para remover uma notícia
-@app.delete("/news/{news_id}")
-async def delete_news(news_id: int):
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute("DELETE FROM news WHERE id = %s;", (news_id,))
-            conn.commit()
-            return {"message": "News item deleted successfully."}
+            return {"iqa_data": iqa_data, "analysis": analysis_result}
     finally:
         conn.close()
