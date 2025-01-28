@@ -18,6 +18,11 @@ SUPABASE_DB_URL = f"postgresql://postgres:{os.getenv('SUPABASE_TK_PWD')}@db.jxbs
 # Configuração da API OpenAI
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
+from fastapi import HTTPException
+from typing import Dict
+import psycopg2
+import re
+
 # Função para conectar ao banco de dados Supabase
 def get_db_connection():
     try:
@@ -26,87 +31,93 @@ def get_db_connection():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database connection error: {str(e)}")
 
-# Classes de modelo para validação de dados
-class MonitoringData(BaseModel):
-    city: Optional[str]
-    river: Optional[str]
-    parameter: Optional[str]
-    point: Optional[List[str]]
-    start_date: Optional[str]
-    end_date: Optional[str]
+# Função para consultar os dados necessários no banco
+def fetch_monitoring_data(city: str, river: str, point: str, date: str):
+    query = (
+        "SELECT pH, TURBIDEZ, OD, TEMPERATURA, COLIFORMES, TDS, DBO, NITROGENIO_TOTAL, FOSFORO_TOTAL "
+        "FROM monitoring_data WHERE city = %s AND river = %s AND point = %s AND collection_date = %s"
+    )
 
-class AnalysisRequest(BaseModel):
-    parameters: dict
-    collection_site: Optional[str]
-    water_body_type: Optional[str]
-    weather_conditions: Optional[str]
-    human_activities: Optional[str]
-    usage: Optional[str]
-    coordinates: Optional[str]
-    collection_date: Optional[str]
-    collection_time: Optional[str]
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(query, (city, river, point, date))
+            result = cursor.fetchone()
+            conn.close()
 
-# Novo modelo para cálculo do IQA
-class IQARequest(BaseModel):
-    parameters: Dict[str, str]  # Dicionário com os parâmetros e seus valores
+            if result:
+                # Converte os resultados para um dicionário
+                columns = ["pH", "TURBIDEZ", "OD", "TEMPERATURA", "COLIFORMES", "TDS", "DBO", "NITROGENIO_TOTAL", "FOSFORO_TOTAL"]
+                return dict(zip(columns, result))
+            else:
+                raise HTTPException(status_code=404, detail="No data found for the specified filters.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching monitoring data: {str(e)}")
 
 # Função para calcular o IQA
-def calcular_iqa(valores_parametros: Dict[str, str]):
+def calcular_iqa(city: str, river: str, point: str, date: str):
     try:
+        # Busca os dados do banco de dados
+        valores_parametros = fetch_monitoring_data(city, river, point, date)
+
         # Convertendo os valores para float, se possível
         faltantes = []
-        parametros_relevantes = ['pH', 'TURBIDEZ (NTU)', 'OD', 'TEMPERATURA', 'COLIFORMES', 'TDS', 'DBO', 'NITROGENIO_TOTAL', 'FOSFORO_TOTAL']
-        valores_parametros = {k: valores_parametros[k] for k in parametros_relevantes if k in valores_parametros}
         for key in valores_parametros:
-            # Substituindo vírgula por ponto e removendo caracteres não numéricos
             if isinstance(valores_parametros[key], str):
-                valores_parametros[key] = re.sub(r'[^0-9.,]', '', valores_parametros[key]).replace(',', '.')
+                valores_parametros[key] = re.sub(r"[^0-9.,]", "", valores_parametros[key]).replace(",", ".")
             try:
                 valores_parametros[key] = float(valores_parametros[key])
             except (ValueError, TypeError):
                 valores_parametros[key] = None
                 faltantes.append(key)
-        
+
         if any(v is None for v in valores_parametros.values()):
             return None, f"Erro: Parâmetros faltantes ou inválidos: {', '.join(faltantes)}. Não é possível calcular o IQA sem todos os parâmetros."
 
         # Pesos dos parâmetros utilizados no cálculo do IQA
         pesos = {
-            'OD': 0.17,
-            'COLIFORMES': 0.15,
-            'DBO': 0.10,
-            'NITROGENIO_TOTAL': 0.10,
-            'FOSFORO_TOTAL': 0.10,
-            'TURBIDEZ (NTU)': 0.08,
-            'TDS': 0.08,
-            'pH': 0.12,
-            'TEMPERATURA': 0.10
+            "OD": 0.17,
+            "COLIFORMES": 0.15,
+            "DBO": 0.10,
+            "NITROGENIO_TOTAL": 0.10,
+            "FOSFORO_TOTAL": 0.10,
+            "TURBIDEZ": 0.08,
+            "TDS": 0.08,
+            "pH": 0.12,
+            "TEMPERATURA": 0.10,
         }
 
         # Função para converter os valores dos parâmetros para a escala de 0 a 100 (qi)
         def converter_para_qi(param, valor):
             conversao_qi = {
-                'OD': 80 if valor >= 6 else 50,
-                'COLIFORMES': 30 if valor >= 1000 else 70,
-                'DBO': 60 if valor <= 5 else 30,
-                'NITROGENIO_TOTAL': 70 if valor <= 10 else 40,
-                'FOSFORO_TOTAL': 90 if valor <= 0.1 else 50,
-                'TURBIDEZ (NTU)': 85 if valor <= 10 else 40,
-                'TDS': 75 if valor <= 500 else 50,
-                'pH': 90 if 6.5 <= valor <= 8.5 else 60,
-                'TEMPERATURA': 70 if valor <= 25 else 50
+                "OD": 80 if valor >= 6 else 50,
+                "COLIFORMES": 30 if valor >= 1000 else 70,
+                "DBO": 60 if valor <= 5 else 30,
+                "NITROGENIO_TOTAL": 70 if valor <= 10 else 40,
+                "FOSFORO_TOTAL": 90 if valor <= 0.1 else 50,
+                "TURBIDEZ": 85 if valor <= 10 else 40,
+                "TDS": 75 if valor <= 500 else 50,
+                "pH": 90 if 6.5 <= valor <= 8.5 else 60,
+                "TEMPERATURA": 70 if valor <= 25 else 50,
             }
             return conversao_qi.get(param, 50)
 
         # Converte cada valor de parâmetro para qi
-        valores_parametros_qi = {param: converter_para_qi(param, valor) for param, valor in valores_parametros.items()}
+        valores_parametros_qi = {
+            param: converter_para_qi(param, valor)
+            for param, valor in valores_parametros.items()
+        }
 
         # Cálculo da média ponderada para obter o IQA
-        iqa = sum(valores_parametros_qi[param] * pesos.get(param, 0) for param in valores_parametros_qi) / sum(pesos.values())
-              
+        iqa = sum(
+            valores_parametros_qi[param] * pesos.get(param, 0)
+            for param in valores_parametros_qi
+        ) / sum(pesos.values())
+
         return iqa, None
     except Exception as e:
         return None, str(e)
+
 
 # Novo endpoint para cálculo do IQA
 @app.post("/iqa/calculate")
