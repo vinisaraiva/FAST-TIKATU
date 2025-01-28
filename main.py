@@ -40,11 +40,30 @@ class AnalysisRequest(BaseModel):
 class NewsItem(BaseModel):
     id: Optional[int]
     title: str
+    summary: str
     content: str
     date: Optional[str]
+    image_url: Optional[str]
 
 # Simulação de armazenamento de notícias
-news_storage = []
+news_storage = [
+    {
+        "id": 1,
+        "title": "New Water Quality Report Released",
+        "summary": "The latest report on water quality shows improvements in key areas.",
+        "content": "The latest report on water quality has been released, showing improvements in key areas. Detailed insights into the report highlight progress in reducing pollution levels.",
+        "date": "2025-01-01",
+        "image_url": "https://example.com/images/report.jpg"
+    },
+    {
+        "id": 2,
+        "title": "Community Efforts to Clean Rivers",
+        "summary": "Local communities join forces to clean rivers in their areas.",
+        "content": "Local communities have joined forces to clean the rivers in their areas. These efforts include organized clean-up drives and awareness campaigns.",
+        "date": "2025-01-15",
+        "image_url": "https://example.com/images/cleaning.jpg"
+    }
+]
 
 # Função para gerar PDFs dinâmicos
 def generate_analysis_pdf(analysis_result: dict, pdf_path: str):
@@ -97,6 +116,68 @@ def build_prompt_for_custom_analysis(request: AnalysisRequest):
     prompt += "\nAct as an expert with a PhD in water parameter analysis, but you need to respond with language accessible to diverse audiences. Generate an initial analysis of water quality based on this information."
     return prompt
 
+# Rota para listar todas as notícias
+@app.get("/news")
+async def get_news():
+    """
+    Retorna todas as notícias para exibição inicial nos cards.
+    Inclui título, resumo, data e URL da imagem.
+    """
+    return {"news": [
+        {
+            "id": news["id"],
+            "title": news["title"],
+            "summary": news["summary"],
+            "date": news["date"],
+            "image_url": news["image_url"]
+        }
+        for news in news_storage
+    ]}
+
+# Rota para detalhar uma notícia específica
+@app.get("/news/{news_id}")
+async def get_news_item(news_id: int):
+    """
+    Retorna o conteúdo completo de uma notícia com base no ID.
+    Inclui título, conteúdo completo, data e URL da imagem.
+    """
+    for news in news_storage:
+        if news.get("id") == news_id:
+            return news
+    raise HTTPException(status_code=404, detail="News item not found.")
+
+# Rota para adicionar uma nova notícia
+@app.post("/news")
+async def create_news(news_item: NewsItem):
+    """
+    Adiciona uma nova notícia ao sistema.
+    """
+    news_item.id = len(news_storage) + 1
+    news_storage.append(news_item.dict())
+    return {"message": "News item created successfully.", "news_item": news_item}
+
+# Rota para atualizar uma notícia existente
+@app.put("/news/{news_id}")
+async def update_news(news_id: int, news_item: NewsItem):
+    """
+    Atualiza uma notícia existente com base no ID.
+    """
+    for idx, news in enumerate(news_storage):
+        if news.get("id") == news_id:
+            news_storage[idx].update(news_item.dict())
+            return {"message": "News item updated successfully.", "news_item": news_storage[idx]}
+    raise HTTPException(status_code=404, detail="News item not found.")
+
+# Rota para remover uma notícia existente
+@app.delete("/news/{news_id}")
+async def delete_news(news_id: int):
+    """
+    Remove uma notícia existente com base no ID.
+    """
+    global news_storage
+    news_storage = [news for news in news_storage if news.get("id") != news_id]
+    return {"message": "News item deleted successfully."}
+
 # Rota de análise personalizada
 @app.post("/custom/analysis")
 async def custom_analysis(request: AnalysisRequest):
@@ -113,120 +194,8 @@ async def custom_analysis(request: AnalysisRequest):
         prompt = build_prompt_for_custom_analysis(request)
 
         # Gera análise com OpenAI
-        analysis_result = generate_analysis_with_openai(prompt)
+        analysis_result = generate_analysis_with_openAI(prompt)
 
         return {"parameters": request.parameters, "analysis": analysis_result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-# Rota de gráfico para monitoramento
-@app.get("/monitoring/graph")
-async def get_monitoring_graph(
-    city: str,
-    river: str,
-    parameter: str,
-    points: List[str] = Query(...),
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None
-):
-    """
-    Endpoint para retornar dados filtrados para renderização de gráficos na tela de monitoramento.
-    Suporta filtros por cidade, rio, parâmetro, pontos de coleta e intervalo de datas.
-    """
-    try:
-        response = requests.get(SHEETDB_RIOCHAMAGUNGA_API_URL)
-        if response.status_code != 200:
-            raise HTTPException(status_code=500, detail="Failed to fetch monitoring data.")
-
-        data = response.json()
-
-        # Filtrar os dados com base nos parâmetros fornecidos
-        filtered_data = [
-            entry for entry in data
-            if entry.get("CIDADE") == city
-            and entry.get("RIO") == river
-            and entry.get("PONTOS") in points
-            and parameter in entry
-            and (
-                (not start_date and not end_date) or
-                (start_date and end_date and start_date <= entry.get("DATA_COLETA") <= end_date) or
-                (start_date and not end_date and entry.get("DATA_COLETA") == start_date)
-            )
-        ]
-
-        # Preparar os dados para o gráfico
-        graph_data = {}
-        for entry in filtered_data:
-            point = entry.get("PONTOS")
-            date = entry.get("DATA_COLETA")
-            value = float(entry.get(parameter, 0))
-
-            if point not in graph_data:
-                graph_data[point] = []
-            graph_data[point].append({"date": date, "value": value})
-
-        return {"graph_data": graph_data}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# Rota de gráfico para IQA
-@app.get("/iqa/graph")
-async def get_iqa_graph(city: str, river: str, points: List[str]):
-    """
-    Endpoint para retornar os valores de IQA para renderização de gráficos na tela de IQA.
-    A análise com IA NÃO É AUTOMÁTICA, sendo necessária a chamada manual via botão no front-end.
-    """
-    try:
-        response = requests.get(SHEETDB_RIOCHAMAGUNGA_API_URL)
-        if response.status_code != 200:
-            raise HTTPException(status_code=500, detail="Failed to fetch monitoring data.")
-
-        data = response.json()
-
-        # Filtrar os dados com base na cidade, rio e pontos de coleta
-        filtered_data = [
-            entry for entry in data
-            if entry.get("CIDADE") == city and entry.get("RIO") == river and entry.get("PONTOS") in points
-        ]
-
-        # Calcular o IQA
-        iqa_results = calculate_iqa(filtered_data)
-
-        # Retornar os valores de IQA para o gráfico
-        return {"iqa_results": iqa_results}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# Rota de cálculo do IQA com análise
-@app.post("/iqa/analysis")
-async def analyze_iqa_data(city: str, river: str, points: List[str]):
-    """
-    Endpoint para realizar análise de IQA manualmente ao acionar o botão na tela de IQA.
-    Recebe os pontos filtrados e gera uma análise detalhada com base nos valores de IQA.
-    """
-    try:
-        response = requests.get(SHEETDB_RIOCHAMAGUNGA_API_URL)
-        if response.status_code != 200:
-            raise HTTPException(status_code=500, detail="Failed to fetch monitoring data.")
-
-        data = response.json()
-
-        # Filtrar os dados com base na cidade, rio e pontos de coleta
-        filtered_data = [
-            entry for entry in data
-            if entry.get("CIDADE") == city and entry.get("RIO") == river and entry.get("PONTOS") in points
-        ]
-
-        # Calcular o IQA
-        iqa_results = calculate_iqa(filtered_data)
-
-        # Construir o prompt para análise do IQA
-        prompt = build_prompt_for_iqa_analysis(iqa_results)
-
-        # Gera análise com OpenAI
-        analysis_result = generate_analysis_with_openai(prompt)
-
-        return {"iqa_results": iqa_results, "analysis": analysis_result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
