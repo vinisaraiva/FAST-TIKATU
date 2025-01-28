@@ -98,6 +98,15 @@ def generate_pdf(analysis_text):
     pdf.output(pdf_path)
     return pdf_path
 
+# Endpoint para gerar PDF
+@app.post("/generate-pdf")
+async def generate_pdf_endpoint(analysis_text: str):
+    try:
+        pdf_path = generate_pdf(analysis_text)
+        return FileResponse(pdf_path, media_type="application/pdf", filename="analysis_report.pdf")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Endpoint para análise personalizada
 @app.post("/custom/analysis")
 async def custom_analysis(request: AnalysisRequest):
@@ -112,12 +121,9 @@ async def custom_analysis(request: AnalysisRequest):
         # Gera análise com OpenAI
         analysis_result = generate_analysis_with_openai(prompt)
 
-        # Gerar PDF com a análise
-        pdf_path = generate_pdf(analysis_result)
-
         return {
             "analysis": analysis_result,
-            "pdf_url": pdf_path
+            "pdf_generation_url": "/generate-pdf"  # URL para gerar o PDF
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -249,7 +255,11 @@ async def analyze_monitoring_data(
             prompt = build_prompt_for_monitoring_analysis(monitoring_data)
             analysis_result = generate_analysis_with_openai(prompt)
 
-            return {"monitoring_data": monitoring_data, "analysis": analysis_result}
+            return {
+                "monitoring_data": monitoring_data,
+                "analysis": analysis_result,
+                "pdf_generation_url": "/generate-pdf"  # URL para gerar o PDF
+            }
     finally:
         conn.close()
 
@@ -287,6 +297,10 @@ async def analyze_iqa_data(
             prompt = build_prompt_for_iqa_analysis(iqa_data)
             analysis_result = generate_analysis_with_openai(prompt)
 
-            return {"iqa_data": iqa_data, "analysis": analysis_result}
+            return {
+                "iqa_data": iqa_data,
+                "analysis": analysis_result,
+                "pdf_generation_url": "/generate-pdf"  # URL para gerar o PDF
+            }
     finally:
         conn.close()
