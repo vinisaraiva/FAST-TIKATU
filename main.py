@@ -63,7 +63,8 @@ def build_prompt_for_monitoring_analysis(monitoring_data):
     Analyze the following water monitoring data:
     """
     for entry in monitoring_data:
-        prompt += f"Point {entry['point']} on {entry['collection_date']}:\n"
+        prompt += f"Point {entry['point']} on {entry['collection_date']}:
+"
         for key, value in entry.items():
             if key not in ['point', 'collection_date', 'id']:
                 prompt += f"  - {key}: {value}\n"
@@ -75,7 +76,8 @@ def build_prompt_for_iqa_analysis(iqa_data):
     Analyze the Water Quality Index (WQI) for the following points:
     """
     for entry in iqa_data:
-        prompt += f"Point {entry['point']}:\n"
+        prompt += f"Point {entry['point']}:
+"
         for key, value in entry.items():
             if key not in ['point', 'id']:
                 prompt += f"  - {key}: {value}\n"
