@@ -90,21 +90,21 @@ def calculate_iqa(request: IQARequest):
 
 @app.post("/custom-analysis", tags=["Análises Personalizadas"], summary="Realiza uma análise personalizada da qualidade da água")
 def custom_analysis(request: AnalysisRequest):
-    response = requests.post(f"{SUPABASE_URL}/rest/v1/custom_analysis", headers=HEADERS, json=request.dict())
+    response = requests.post(f"{SUPABASE_DB_URL}/rest/v1/custom_analysis", headers=HEADERS, json=request.dict())
     if response.status_code == 201:
         return response.json()
     raise HTTPException(status_code=500, detail="Erro ao realizar análise personalizada.")
 
 @app.get("/iqa/graph", tags=["IQA"], summary="Geração de gráfico de IQA")
 def iqa_graph():
-    response = requests.get(f"{SUPABASE_URL}/rest/v1/graph_data", headers=HEADERS)
+    response = requests.get(f"{SUPABASE_DB_URL}/rest/v1/graph_data", headers=HEADERS)
     if response.status_code == 200:
         return response.json()
     raise HTTPException(status_code=500, detail="Erro ao buscar dados do gráfico.")
 
 @app.get("/monitoring/graph-map", tags=["Monitoramento"], summary="Gráfico e Mapa do Monitoramento")
 def monitoring_graph_map():
-    response = requests.get(f"{SUPABASE_URL}/rest/v1/monitoring_graph_map", headers=HEADERS)
+    response = requests.get(f"{SUPABASE_DB_URL}/rest/v1/monitoring_graph_map", headers=HEADERS)
     if response.status_code == 200:
         return response.json()
     raise HTTPException(status_code=500, detail="Erro ao buscar dados do gráfico e mapa.")
@@ -115,14 +115,14 @@ def generate_pdf():
 
 @app.post("/monitoring/analysis", tags=["Monitoramento"], summary="Análise dos dados de monitoramento")
 def monitoring_analysis():
-    response = requests.get(f"{SUPABASE_URL}/rest/v1/monitoring_analysis", headers=HEADERS)
+    response = requests.get(f"{SUPABASE_DB_URL}/rest/v1/monitoring_analysis", headers=HEADERS)
     if response.status_code == 200:
         return response.json()
     raise HTTPException(status_code=500, detail="Erro ao buscar análise de monitoramento.")
 
 @app.post("/iqa/analysis", tags=["IQA"], summary="Análise do Índice de Qualidade da Água (IQA)")
 def analyze_iqa():
-    response = requests.get(f"{SUPABASE_URL}/rest/v1/iqa_analysis", headers=HEADERS)
+    response = requests.get(f"{SUPABASE_DB_URL}/rest/v1/iqa_analysis", headers=HEADERS)
     if response.status_code == 200:
         return response.json()
     raise HTTPException(status_code=500, detail="Erro ao buscar análise de IQA.")
