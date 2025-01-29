@@ -30,6 +30,24 @@ def get_db_connection():
         raise HTTPException(status_code=500, detail=f"Database connection error: {str(e)}")
 
 
+# Definição da classe IQARequest para validação
+class IQARequest(BaseModel):
+    city: str
+    river: str
+    point: str
+    date: str
+
+# Definição da classe AnalysisRequest para análise personalizada
+class AnalysisRequest(BaseModel):
+    parameters: dict
+    collection_site: Optional[str]
+    water_body_type: Optional[str]
+    weather_conditions: Optional[str]
+    human_activities: Optional[str]
+    usage: Optional[str]
+    coordinates: Optional[str]
+    collection_date: Optional[str]
+    collection_time: Optional[str]
 
 # Definição da classe IQARequest para validação
 class IQARequest(BaseModel):
