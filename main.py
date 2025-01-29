@@ -83,6 +83,48 @@ def fetch_monitoring_data(city: str, river: str, points: List[str], start_date: 
     finally:
         conn.close()
 
+
+def generate_analysis(data: dict, context: str = "análise geral") -> str:
+    """
+    Gera uma análise com base nos dados fornecidos usando a API da OpenAI.
+    :param data: Dados a serem analisados.
+    :param context: Contexto da análise (ex: "monitoramento", "IQA", "análise personalizada").
+    :return: Texto da análise gerada.
+    """
+    try:
+        prompt = f"""
+        Com base nos seguintes dados de {context}, forneça uma análise detalhada:
+        {data}
+        """
+        response = openai.Completion.create(
+            engine="text-davinci-003",
+            prompt=prompt,
+            max_tokens=500,
+            temperature=0.7
+        )
+        return response.choices[0].text.strip()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao gerar análise com OpenAI: {str(e)}")
+
+
+def generate_pdf(content: str, filename: str = "relatorio.pdf"):
+    """
+    Gera um relatório em PDF com o conteúdo fornecido.
+    :param content: Conteúdo do relatório.
+    :param filename: Nome do arquivo PDF.
+    :return: Caminho do arquivo PDF gerado.
+    """
+    try:
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", size=12)
+        pdf.multi_cell(0, 10, content)
+        pdf.output(filename)
+        return filename
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao gerar PDF: {str(e)}")
+
+
 # Cálculo do IQA
 def calcular_iqa(city: str, river: str, point: str, date: str):
     valores_parametros = fetch_monitoring_data(city, river, point, date)
