@@ -55,21 +55,31 @@ def get_db_connection():
         raise HTTPException(status_code=500, detail=f"Database connection error: {str(e)}")
 
 # Busca dados de monitoramento no banco
-def fetch_monitoring_data(city: str, river: str, point: str, date: str):
+def fetch_monitoring_data(city: str, river: str, points: List[str], start_date: str, end_date: str):
+    """
+    Busca dados de monitoramento no banco de dados com filtros de cidade, rio, pontos e intervalo de datas.
+    :param city: Cidade.
+    :param river: Rio.
+    :param points: Lista de pontos de coleta.
+    :param start_date: Data inicial (formato YYYY-MM-DD).
+    :param end_date: Data final (formato YYYY-MM-DD).
+    :return: Lista de dados de monitoramento.
+    """
     query = """
-    SELECT pH, TURBIDEZ, OD, TEMPERATURA, COLIFORMES, TDS, DBO, NITROGENIO_TOTAL, FOSFORO_TOTAL
-    FROM monitoring_data WHERE city = %s AND river = %s AND point = %s AND collection_date = %s
+    SELECT pH, TURBIDEZ, OD, TEMPERATURA, COLIFORMES, TDS, DBO, NITROGENIO_TOTAL, FOSFORO_TOTAL, collection_date, point
+    FROM monitoring_data
+    WHERE city = %s AND river = %s AND point IN %s AND collection_date BETWEEN %s AND %s
+    ORDER BY collection_date, point
     """
     conn = get_db_connection()
     try:
-        with conn.cursor() as cursor:
-            cursor.execute(query, (city, river, point, date))
-            result = cursor.fetchone()
-            if result:
-                columns = ["pH", "TURBIDEZ", "OD", "TEMPERATURA", "COLIFORMES", "TDS", "DBO", "NITROGENIO_TOTAL", "FOSFORO_TOTAL"]
-                return dict(zip(columns, result))
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+            cursor.execute(query, (city, river, tuple(points), start_date, end_date))
+            results = cursor.fetchall()
+            if results:
+                return [dict(row) for row in results]
             else:
-                raise HTTPException(status_code=404, detail="No data found for the specified filters.")
+                raise HTTPException(status_code=404, detail="Nenhum dado encontrado para os filtros especificados.")
     finally:
         conn.close()
 
@@ -126,3 +136,85 @@ def analyze_iqa():
     if response.status_code == 200:
         return response.json()
     raise HTTPException(status_code=500, detail="Erro ao buscar análise de IQA.")
+
+@app.get("/news", tags=["Notícias"], summary="Lista notícias para a home")
+def list_news(limit: int = Query(10, description="Número máximo de notícias a serem retornadas")):
+    query = f"""
+    SELECT id, title, summary, date, image_url
+    FROM news
+    ORDER BY date DESC
+    LIMIT {limit}
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+            cursor.execute(query)
+            results = cursor.fetchall()
+            if results:
+                return [dict(row) for row in results]
+            else:
+                raise HTTPException(status_code=404, detail="Nenhuma notícia encontrada.")
+    finally:
+        conn.close()
+
+@app.get("/news/{news_id}", tags=["Notícias"], summary="Exibe uma notícia completa")
+def get_news(news_id: int):
+    query = """
+    SELECT id, title, summary, content, date, image_url
+    FROM news
+    WHERE id = %s
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+            cursor.execute(query, (news_id,))
+            result = cursor.fetchone()
+            if result:
+                return dict(result)
+            else:
+                raise HTTPException(status_code=404, detail="Notícia não encontrada.")
+    finally:
+        conn.close()
+
+@app.post("/iqa/analysis", tags=["IQA"], summary="Gera análise do Índice de Qualidade da Água (IQA)")
+def iqa_analysis(city: str, river: str, points: List[str], start_date: str, end_date: str):
+    # Busca dados de monitoramento
+    data = fetch_monitoring_data(city, river, points, start_date, end_date)
+    
+    # Calcula o IQA para cada ponto e data
+    iqa_results = []
+    for entry in data:
+        iqa, _ = calcular_iqa(city, river, entry["point"], entry["collection_date"])
+        iqa_results.append({"point": entry["point"], "date": entry["collection_date"], "iqa": iqa})
+    
+    # Gera análise com OpenAI
+    analysis = generate_analysis(iqa_results, context="análise do Índice de Qualidade da Água (IQA)")
+    
+    # Gera PDF com a análise
+    pdf_filename = generate_pdf(analysis, filename=f"analise_iqa_{city}_{river}.pdf")
+    
+    return FileResponse(pdf_filename, media_type="application/pdf", filename=pdf_filename)
+
+@app.post("/custom-analysis", tags=["Análises Personalizadas"], summary="Gera análise personalizada da qualidade da água")
+def custom_analysis(request: AnalysisRequest):
+    # Gera análise com OpenAI
+    analysis = generate_analysis(request.dict(), context="análise personalizada da qualidade da água")
+    
+    # Gera PDF com a análise
+    pdf_filename = generate_pdf(analysis, filename="analise_personalizada.pdf")
+    
+    return FileResponse(pdf_filename, media_type="application/pdf", filename=pdf_filename)
+
+
+@app.post("/monitoring/analysis", tags=["Monitoramento"], summary="Gera análise dos dados de monitoramento")
+def monitoring_analysis(city: str, river: str, points: List[str], start_date: str, end_date: str):
+    # Busca dados de monitoramento
+    data = fetch_monitoring_data(city, river, points, start_date, end_date)
+    
+    # Gera análise com OpenAI
+    analysis = generate_analysis(data, context="monitoramento da qualidade da água")
+    
+    # Gera PDF com a análise
+    pdf_filename = generate_pdf(analysis, filename=f"analise_monitoramento_{city}_{river}.pdf")
+    
+    return FileResponse(pdf_filename, media_type="application/pdf", filename=pdf_filename)
