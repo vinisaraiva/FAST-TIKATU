@@ -49,13 +49,13 @@ class AnalysisRequest(BaseModel):
     collection_date: Optional[str]
     collection_time: Optional[str]
 
-# Definição da classe IQARequest para validação
-class IQARequest(BaseModel):
-    city: str
-    river: str
-    point: str
-    date: str
-
+# Função para conectar ao banco de dados Supabase
+def get_db_connection():
+    try:
+        conn = psycopg2.connect(SUPABASE_DB_URL, sslmode="require")
+        return conn
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database connection error: {str(e)}")
 
 # Função para consultar os dados necessários no banco
 def fetch_monitoring_data(city: str, river: str, point: str, date: str):
@@ -154,23 +154,13 @@ async def calculate_iqa(request: IQARequest):
         return {"error": error}
     return {"iqa": iqa}
 
+@app.post("/custom-analysis")
+async def custom_analysis(request: AnalysisRequest):
+    prompt = build_prompt_for_custom_analysis(request)
+    return {"prompt": prompt}
 
-# Novo endpoint para cálculo do IQA
-@app.post("/iqa/calculate")
-async def calculate_iqa(request: IQARequest):
-    try:
-        # Verifica se os parâmetros foram fornecidos
-        if not request.parameters:
-            raise HTTPException(status_code=400, detail="Nenhum parâmetro fornecido para cálculo do IQA.")
+# Aqui deve ser reintroduzido o restante do código original
 
-        # Calcula o IQA
-        iqa, erro = calcular_iqa(request.parameters)
-        if erro:
-            raise HTTPException(status_code=400, detail=erro)
-
-        return {"iqa": iqa}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 # Função para realizar análise com OpenAI
 def generate_analysis_with_openai(prompt):
